@@ -1,6 +1,6 @@
 #!/usr/local/bin/python
 # vim: set tabstop=4 shiftwidth=4 autoindent smartindent:
-'''MultiLock, manage lockfiles and lockgroups
+'''MultiLock, manage lock files and parallel groups
 
 >>> from multilock import MultiLock
 >>> spamlock = MultiLock('spam')
@@ -12,7 +12,7 @@
 >>> 
 
 
-You can also manage lock groups (default is .locks) where multiple hosts can run parallel
+You can also manage lock groups (default is a .locks) where multiple hosts can run parallel
 jobs and wait for all locks in the group to clear before continuing 
 e.g., 
 >>> 
@@ -46,7 +46,7 @@ class MultiLockDeniedException(Exception):
 
 
 class MultiLock:
-	def __init__(self, lockname='lock', lockgroup='.locks', basepath='.', poll=0.5):
+	def __init__(self, lockname='lock', lockgroup='.locks', basepath='.', poll=0.5, nohup=False):
 		''' MultiLock instance
 
 			lockname: the name of this lock, default is 'lock'
@@ -64,6 +64,22 @@ class MultiLock:
 		self.pid = os.getpid()
 		self.poll = int(poll)
 		self.fd = None
+		self.nohup = nohup
+		if nohup:
+			self.pid = -1
+		self._lockgroup()
+
+
+	def _lockgroup(self):
+		try:
+			logging.debug('make sure that the lockgroup %s exists' %(self.lockgroup))
+			os.makedirs(self.lockgroup)
+		except OSError as exc:
+			if exc.errno == errno.EEXIST:
+				pass
+			else:
+				logging.error('fatal error trying to access lockgroup %s' %(self.lockgroup))
+				raise
 
 
 	def acquire(self, maxage=None):
@@ -71,15 +87,7 @@ class MultiLock:
 			logging.debug('you do not have the lock %s' %(self.lockedfile))
 			if maxage:
 				self.cleanup(maxage)
-			try:
-				logging.debug('make sure that the lockgroup %s exists' %(self.lockgroup))
-				os.makedirs(self.lockgroup)
-			except OSError as exc:
-				if exc.errno == errno.EEXIST:
-					pass
-				else:
-					logging.error('fatal error trying to access lockgroup %s' %(self.lockgroup))
-					raise
+			self._lockgroup()
 			try:
 				logging.debug('attempt to create lock %s' %(self.lockfile))
 				os.mkdir(os.path.dirname(self.lockfile))
@@ -87,11 +95,15 @@ class MultiLock:
 				os.write(self.fd, self.hostname+' '+str(self.pid))
 				os.fsync(self.fd)
 				os.close(self.fd)
-				logging.debug('attempt multilock %s' %(self.lockedfile))
-				os.rename(self.lockfile, self.lockedfile)
-				return self.verify()
 			except OSError:
-				logging.debug('unable to multilock %s' %(self.lockfile))
+				logging.debug('unable to create lock %s' %(self.lockfile))
+			else:
+				try:
+					logging.debug('attempt multilock %s' %(self.lockedfile))
+					os.rename(self.lockfile, self.lockedfile)
+					return self.verify()
+				except OSError:
+					logging.debug('unable to multilock %s' %(self.lockedfile))
 		return 0
 
 
@@ -140,7 +152,7 @@ class MultiLock:
 			except:
 				pass
 		if os.path.isfile(self.lockedfile):
-			logging.debug('lock %s exists, checking hostname:pid' % (self.lockedfile))
+			logging.debug('potential cleanup, lock %s exists, checking hostname:pid' % (self.lockedfile))
 			qhostname, qpid = (None, None)
 			try:
 				fh = open(self.lockedfile)
@@ -150,7 +162,10 @@ class MultiLock:
 				pass
 			if self.hostname == qhostname:
 				try:
-					if int(qpid) > 0:
+					if int(qpid) < 0:
+						logging.debug('nohup lock %s, must manually release or timeout' %(self.lockedfile))
+						return 1
+					elif int(qpid) > 0:
 						os.kill(int(qpid), 0)
 				except OSError, e:
 					if e.errno != errno.EPERM:
@@ -188,7 +203,8 @@ class MultiLock:
 
 
 	def __del__(self):
-		self.release()
+		if not self.nohup:
+			self.release()
 
 	
 	def __enter__(self):
