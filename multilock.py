@@ -67,7 +67,6 @@ class MultiLock:
 		self.nohup = nohup
 		if nohup:
 			self.pid = -1
-		self._lockgroup()
 
 
 	def _lockgroup(self):
@@ -181,7 +180,18 @@ class MultiLock:
 
 
 	def wait(self, timeout=86400):
-		logging.debug('waiting for lockgroup %s to complete' %(self.lockgroup))
+		logging.debug('wait for lock %s to complete' %(self.lockedfile))
+		timeout = int(timeout)
+		start_time = time.time()
+		while os.path.exists(self.lockedfile):
+			if (time.time() - start_time) >= timeout:
+				raise MultiLockTimeoutException("Timeout %s seconds" %(timeout))
+				return 1
+			time.sleep(self.poll)
+
+
+	def wait_group(self, timeout=86400):
+		logging.debug('wait for lockgroup %s to complete' %(self.lockgroup))
 		timeout = int(timeout)
 		start_time = time.time()
 		while True:
